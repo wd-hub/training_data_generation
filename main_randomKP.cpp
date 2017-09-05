@@ -62,9 +62,9 @@ Eigen::Matrix4f quaternion2matrix(campos &impos);
 void generatePointCloud(cv::Mat& rgb, cv::Mat& dep, campam& camera, pcl::PointCloud<PointType>::Ptr& cloud);
 
 int main() {
-    std::string fsSettings   = "/home/wd/Documents/Dataset/TUM/TUM1.yaml";
-    std::string sequence     = "/home/wd/Documents/Dataset/TUM/rgbd_dataset_freiburg1_desk";
-    std::string association  = "/home/wd/Documents/Dataset/TUM/rgbd_dataset_freiburg1_desk/fr1_desk.txt";
+    std::string fsSettings   = "/home/dong/Documents/3D_Matching/3DV/orb_slam/Examples/RGB-D/TUM1.yaml";
+    std::string sequence     = "/home/dong/Documents/3D_Matching/Dataset/TUM/rgbd_dataset_freiburg1_desk";
+    std::string association  = "/home/dong/Documents/3D_Matching/Dataset/TUM/rgbd_dataset_freiburg1_desk/fr1_desk.txt";
     std::string outputFilename   = "../map.ply";
 
     // Retrieve paths to images
@@ -98,7 +98,8 @@ int main() {
 //    pcl::visualization::PCLVisualizer viewer("Viewer Clouds");
     InSeg::InSegLib slam;
     std::vector<frameInfo> frames;
-    for (size_t i = 0; i < 20; i++)
+    int num_frame = 2000;
+    for (size_t i = 0; i < std::min(num_frame, (int)vCampos.size()); i++)
     {
         std::cout<<"Frame--"<<i<<std::endl;
         cv::Mat bgr1 = cv::imread(sequence+"/"+vstrImageFilenamesRGB[i],CV_LOAD_IMAGE_UNCHANGED);
@@ -192,19 +193,22 @@ int main() {
     ofstream info(savePath + "/info.txt", ios::out);
     InSeg::WorldMap map = slam.getMap();
 //    std::vector<InSeg::Surfel>& surfels = map.getSurfels();
-    int Threshold = 5;
+    int Threshold = 2;
+    int num_mappoints = 50000;
     int globalNum = 0;
     int mpNum = 0;
     int wallNum = 0;
+    std::vector<cv::Mat> patches_64X64_GRAY;
     std::vector<cv::Mat> patches_64X64_RGB;
     std::vector<cv::Mat> patches_64X64_DEP;
     std::vector<int> indexP_64X64;
     std::vector<InSeg::Surfel>& surfels = slam.getMap().getSurfels();
     std::random_shuffle(surfels.begin(), surfels.end());
-    for (std::vector<InSeg::Surfel>::iterator it = surfels.begin(); it < std::min(surfels.end(), surfels.begin()+1000); ++it) {
-        std::cout<<"Point "<<it - surfels.begin()<<std::endl;
+    for (std::vector<InSeg::Surfel>::iterator it = surfels.begin(); it < std::min(surfels.end(), surfels.begin()+num_mappoints); ++it) {
+//        std::cout<<"Point "<<it - surfels.begin()<<std::endl;
         Eigen::Vector3f x3Dw = it->pos;
         int kn=0;
+        std::vector<cv::Mat> pointPatch_GRAY;
         std::vector<cv::Mat> pointPatch_RGB;
         std::vector<cv::Mat> pointPatch_DEP;
         std::vector<cv::Point2i> points;
@@ -227,7 +231,7 @@ int main() {
             if (u - ps/2 > 0 && u + ps/2 < frames[i].bgr.rows && v - ps/2 > 0 && v + ps/2 < frames[i].bgr.cols)
             {
                 points.push_back(cv::Point2i(v, u));
-                if (frames[i].dep.at<ushort>(u, v) == 0 || cv::abs(frames[i].dep.at<ushort>(u,v) - zc) < Threshold)
+                if (frames[i].dep.at<ushort>(u, v) == 0 || cv::abs(frames[i].dep.at<ushort>(u,v) - zc) > Threshold)
                     continue;
                 kn++;
                 int vx1 = v - ps/2;
@@ -235,6 +239,11 @@ int main() {
                 cv::Mat patch_rgb = frames[i].bgr(cv::Range(vy1, vy1+ps), cv::Range(vx1, vx1+ps));
                 cv::Mat patch_dep = frames[i].dep(cv::Range(vy1, vy1+ps), cv::Range(vx1, vx1+ps));
 
+                cv::Mat patch_gray;
+                cv::cvtColor(patch_rgb, patch_gray, CV_RGB2GRAY);
+                cv::Mat patch_g2rgb(patch_gray.size(), CV_8UC3);
+                cv::cvtColor(patch_gray, patch_g2rgb, CV_GRAY2RGB);
+                pointPatch_GRAY.push_back(patch_gray);
                 pointPatch_RGB.push_back(patch_rgb);
                 pointPatch_DEP.push_back(patch_dep);
 
@@ -246,8 +255,18 @@ int main() {
         if (kn >= 2)    // if one map point has at least two valid keypoints
         {
             globalNum+=kn;
+
+            cv::putText(pointPatch_GRAY[0],
+                        std::to_string(mpNum),
+                        cv::Point(5,20), // Coordinates
+                        cv::FONT_HERSHEY_COMPLEX_SMALL, // Font
+                        1.0, // Scale. 2.0 = 2x bigger
+                        cv::Scalar(255,255,255) // Color
+            ); // Anti-alias
+
             for (int m = 0; m < kn; m++)
             {
+                patches_64X64_GRAY.push_back(pointPatch_GRAY[m]);
                 patches_64X64_RGB.push_back(pointPatch_RGB[m]);
                 patches_64X64_DEP.push_back(pointPatch_DEP[m]);
                 indexP_64X64.push_back(mpNum);
@@ -261,11 +280,14 @@ int main() {
         }
         if (patches_64X64_RGB.size() > 256)
         {
+            cv::Mat combined_gray(1024, 1024, patches_64X64_GRAY[0].type());
             cv::Mat combined_rgb(1024, 1024, patches_64X64_RGB[0].type());
             cv::Mat combined_dep(1024, 1024, patches_64X64_DEP[0].type());
             int count = 0;
             for (int i = 0; i < 1024; i+=ps) {
                 for (int j = 0; j < 1024; j+=ps) {
+                    cv::Mat roi_gray = combined_gray(cv::Rect(j, i, ps, ps));
+                    patches_64X64_GRAY[count].copyTo(roi_gray);
                     cv::Mat roi_rgb = combined_rgb(cv::Rect(j, i, ps, ps));
                     patches_64X64_RGB[count].copyTo(roi_rgb);
                     cv::Mat roi_dep = combined_dep(cv::Rect(j, i, ps, ps));
@@ -278,12 +300,15 @@ int main() {
             std::stringstream strStr;
             strStr<< setfill('0') << setw(4) << wallNum;
             std::string strTmp(strStr.str());
+            std::string grayName = savePath + "/" + "patches" + strTmp + "_gray.png";
+            cv::imwrite(grayName, combined_gray);
             std::string rgbName = savePath + "/" + "patches" + strTmp + "_rgb.png";
             cv::imwrite(rgbName, combined_rgb);
             std::string depName = savePath + "/" + "patches" + strTmp + "_dep.png";
             cv::imwrite(depName, combined_dep);
 
             wallNum++;
+            patches_64X64_GRAY.erase(patches_64X64_GRAY.begin(), patches_64X64_GRAY.begin()+count);
             patches_64X64_RGB.erase(patches_64X64_RGB.begin(), patches_64X64_RGB.begin()+count);
             patches_64X64_DEP.erase(patches_64X64_DEP.begin(), patches_64X64_DEP.begin()+count);
             indexP_64X64.erase(indexP_64X64.begin(), indexP_64X64.begin()+count);
