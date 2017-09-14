@@ -31,6 +31,7 @@
 typedef pcl::PointXYZRGBA PointType;
 int ps = 64;
 int kp_num = 500;
+float depthUncertaintyCoef = 0.0000285f;
 
 struct campos{
     float tx;
@@ -62,9 +63,9 @@ Eigen::Matrix4f quaternion2matrix(campos &impos);
 void generatePointCloud(cv::Mat& rgb, cv::Mat& dep, campam& camera, pcl::PointCloud<PointType>::Ptr& cloud);
 
 int main() {
-    std::string fsSettings   = "/home/dong/Documents/3D_Matching/3DV/orb_slam/Examples/RGB-D/TUM1.yaml";
-    std::string sequence     = "/home/dong/Documents/3D_Matching/Dataset/TUM/rgbd_dataset_freiburg1_desk";
-    std::string association  = "/home/dong/Documents/3D_Matching/Dataset/TUM/rgbd_dataset_freiburg1_desk/fr1_desk.txt";
+    std::string fsSettings   = "/home/dong/Documents/3D_Matching/3DV/orb_slam/Examples/RGB-D/TUM3.yaml";
+    std::string sequence     = "/home/dong/Documents/3D_Matching/Dataset/TUM/rgbd_dataset_freiburg3_long_office_household";
+    std::string association  = "/home/dong/Documents/3D_Matching/Dataset/TUM/rgbd_dataset_freiburg3_long_office_household/fr3_long_office_household.txt";
     std::string outputFilename   = "../map.ply";
 
     // Retrieve paths to images
@@ -98,12 +99,12 @@ int main() {
 //    pcl::visualization::PCLVisualizer viewer("Viewer Clouds");
     InSeg::InSegLib slam;
     std::vector<frameInfo> frames;
-    int num_frame = 2000;
+    int num_frame = 1000;
     for (size_t i = 0; i < std::min(num_frame, (int)vCampos.size()); i++)
     {
         std::cout<<"Frame--"<<i<<std::endl;
         cv::Mat bgr1 = cv::imread(sequence+"/"+vstrImageFilenamesRGB[i],CV_LOAD_IMAGE_UNCHANGED);
-        cv::Mat dep1 = cv::imread(sequence+"/"+vstrImageFilenamesD[i],CV_LOAD_IMAGE_UNCHANGED)/5.;
+        cv::Mat dep1 = cv::imread(sequence+"/"+vstrImageFilenamesD[i],CV_LOAD_IMAGE_UNCHANGED);
         campos impos1 = vCampos[i];
         Eigen::Matrix4f Twc = quaternion2matrix(impos1);
         Twc(0,3) = Twc(0,3)*1000;
@@ -115,7 +116,8 @@ int main() {
 //        Tcw(1,3) = Tcw(1,3)*1000;
 //        Tcw(2,3) = Tcw(2,3)*1000;
         slam.setReferencePose(Tcw);
-        slam.processFrame(dep1, bgr1);
+        cv::Mat dep1_5 = dep1.clone()/5.;
+        slam.processFrame(dep1_5, bgr1);
         static bool isFirstFrame = true;
         if(isFirstFrame){
             // initialize map
@@ -185,10 +187,18 @@ int main() {
     //------------------- project to image plane --------------------//
     std::vector<std::string> str;
     boost::split(str, sequence, boost::is_any_of("/"));
-    std::string savePath = "../Data/"+str[str.size()-1];
-    boost::filesystem::remove_all(savePath);
-    boost::filesystem::path dir(savePath);
-    boost::filesystem::create_directory(dir);
+    std::string seqPath = "../Data/"+str[str.size()-1];
+    boost::filesystem::remove_all(seqPath);
+    boost::filesystem::path dir(seqPath);
+    std::string savePath =seqPath+"/patches";
+    if (boost::filesystem::create_directory(dir))
+    {
+        boost::filesystem::path sub_dir(savePath);
+        if (boost::filesystem::create_directory(sub_dir))
+            std::cout<<"Create directory successfully!"<<std::endl;
+        else
+            return 0;
+    }
 
     ofstream info(savePath + "/info.txt", ios::out);
     InSeg::WorldMap map = slam.getMap();
@@ -231,7 +241,8 @@ int main() {
             if (u - ps/2 > 0 && u + ps/2 < frames[i].bgr.rows && v - ps/2 > 0 && v + ps/2 < frames[i].bgr.cols)
             {
                 points.push_back(cv::Point2i(v, u));
-                if (frames[i].dep.at<ushort>(u, v) == 0 || cv::abs(frames[i].dep.at<ushort>(u,v) - zc) > Threshold)
+                float errorThresh = depthUncertaintyCoef * frames[i].dep.at<ushort>(u,v)/5. * frames[i].dep.at<ushort>(u,v)/5.;
+                if (frames[i].dep.at<ushort>(u, v) == 0 || cv::abs(frames[i].dep.at<ushort>(u,v)/5. - zc) > Threshold)
                     continue;
                 kn++;
                 int vx1 = v - ps/2;
@@ -256,7 +267,13 @@ int main() {
         {
             globalNum+=kn;
 
-            cv::putText(pointPatch_GRAY[0],
+            std::vector<int> index;
+            for (int n = 0; n < kn; ++n) {
+                index.push_back(n);
+            }
+            std::random_shuffle(index.begin(), index.end());
+
+            cv::putText(pointPatch_GRAY[index[0]],
                         std::to_string(mpNum),
                         cv::Point(5,20), // Coordinates
                         cv::FONT_HERSHEY_COMPLEX_SMALL, // Font
@@ -264,11 +281,11 @@ int main() {
                         cv::Scalar(255,255,255) // Color
             ); // Anti-alias
 
-            for (int m = 0; m < kn; m++)
+            for (int m = 0; m < std::min((int)index.size(), 5); m++)
             {
-                patches_64X64_GRAY.push_back(pointPatch_GRAY[m]);
-                patches_64X64_RGB.push_back(pointPatch_RGB[m]);
-                patches_64X64_DEP.push_back(pointPatch_DEP[m]);
+                patches_64X64_GRAY.push_back(pointPatch_GRAY[index[m]]);
+                patches_64X64_RGB.push_back(pointPatch_RGB[index[m]]);
+                patches_64X64_DEP.push_back(pointPatch_DEP[index[m]]);
                 indexP_64X64.push_back(mpNum);
             }
 //                cv::Mat comI;
