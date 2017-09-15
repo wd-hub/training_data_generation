@@ -1,6 +1,9 @@
 //
 // Created by dong on 04.08.17.
 //
+/*
+ * This script is used to generate pointcloud for each frame and concatenate in world coordinate
+ */
 
 #include <iostream>
 #include <fstream>

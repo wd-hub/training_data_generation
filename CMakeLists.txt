@@ -44,3 +44,7 @@ target_link_libraries(patch_generator ${PCL_LIBRARIES} ${OpenCV_LIBS})
 set(SOURCE_FILES main_randomKP.cpp)
 add_executable(patch_randomKP ${SOURCE_FILES})
 target_link_libraries(patch_randomKP ${PCL_LIBRARIES} ${OpenCV_LIBS} InSegLib)
+
+set(SOURCE_FILES testing_projection.cpp)
+add_executable(patch_testing ${SOURCE_FILES})
+target_link_libraries(patch_testing ${PCL_LIBRARIES} ${OpenCV_LIBS} InSegLib)
